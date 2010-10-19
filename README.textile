@@ -13,7 +13,6 @@ h2. 基于  的跨库访问工具--DBModel
 
 * "Sequal":http://sequal.rubyforge.rog
 * "taobao QA Team":http://qa.taobao.com 
-以下是DBModel的快速指南
 
 h2. DBModel快速指南
 
