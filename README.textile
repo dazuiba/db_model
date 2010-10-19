@@ -1,0 +1,259 @@
+h2. 基于  的跨库访问工具--DBModel
+
+为了方便跨库查询，最大限度地简化测试脚本中的数据库访问。我们设计了DBModel这一类库， 它有以下几个特点：
+
+* 为各种数据库提供一致的访问接口
+* 你可以很方便地同时访问多个数据库(这在我们公司的自动化脚本中经常出现)
+* 将以上两点优雅地和sequal结合起来，所以你可以
+	* 非常方便地使用sequal的各种CURD的API
+  * 为数据表定义Model，以完成更加复杂的数据库操作，比如：设置表间关联
+* 提供Record模式， 让你可以直接create/update/delete一条数据
+
+特别致谢：
+
+* "Sequal":http://sequal.rubyforge.rog
+* "taobao QA Team":http://qa.taobao.com 
+以下是DBModel的快速指南
+
+h2. DBModel快速指南
+
+h3. 数据库相关
+
+h4. 链接一个数据库
+
+<pre>
+require 'automan'
+testDB = DB[:test]
+</pre>
+
+
+h4. 直接使用SQL
+
+<pre>
+  affect_num = testDB.execute("update xxx_table set updated_at='2010-9-9'")
+
+  # affect_num=>10 means 10 rows affected by this update SQL
+
+  result= testDB["SELECT age FROM users WHERE name = ?", name]
+  result.map(:age)
+
+  testDB.fetch("SELECT name FROM users") do |row|
+    p r[:name]
+  end
+</pre>
+
+h4. 获得Dataset
+
+<pre>
+  dataset = testDB[:user]
+</pre>
+
+h3. Dataset相关
+
+h4. Dataset的"链式调用"
+
+<pre>
+  dataset = DB[:users].where(:salary => 5000..10000).order(:name, :department)
+</pre>
+
+h4. 单表插入
+
+<pre>
+  dataset.insert(:name => 'Sharon', :grade => 50)
+</pre>
+
+h4. 获取Datasets 中的数据
+
+<pre>
+  dataset.each{|r| p r}
+  dataset.all #=> [{...}, {...}, ...]
+  dataset.first
+</pre>
+
+h4. 批量更新、删除
+
+<pre>
+  testDB[:user].filter(~:active).delete
+  testDB[:user].filter('price < ?', 100).update(:active => true)
+</pre>
+
+h4. Datasets 是可以遍历的
+
+<pre>
+  dataset.map{|r| r[:name]}
+  dataset.map(:name) # same as above
+
+  dataset.inject(0){|sum, r| sum + r[:value]}
+  dataset.sum(:value) # same as above
+</pre>
+
+h4. 强大的Filter
+
+<pre>
+  dataset.filter(:name => 'abc')
+  dataset.filter('name = ?', 'abc')
+
+  dataset.filter{|o| o.value > 100}
+  dataset.exclude{|o| o.value <= 100}
+
+  dataset.filter(:value => 50..100)
+  dataset.where{|o| (o.value >= 50) & (o.value <= 100)}
+
+  dataset.where('value IN ?', [50,75,100])
+  dataset.where(:value=>[50,75,100])
+
+  dataset.filter(:name => 'abc').first
+  dataset[:name => 'abc']
+
+  dataset.where('price > (SELECT avg(price) + 100 FROM table)')
+  dataset.filter{|o| o.price > dataset.select(o.avg(price) + 100)}
+</pre>
+
+h4. 强大的Filter（进阶用法）
+
+<pre>
+  DB[:items].filter{|o| o.price < 100}.sql 
+  #=> "SELECT * FROM items WHERE (price < 100)" 
+
+  DB[:items].filter(:name.like('AL%')).sql 
+  #=> "SELECT * FROM items WHERE (name LIKE 'AL%')"
+</pre> 
+
+h4. 也支持 AND, OR and NOT嵌套查询:
+
+<pre>
+  DB[:items].filter{|o| (o.x > 5) & (o.y > 10)}.sql 
+  #=> "SELECT * FROM items WHERE ((x > 5) AND (y > 10))" 
+
+  DB[:items].filter({:x => 1, :y => 2}.sql_or & ~{:z => 3}).sql 
+  #=> "SELECT * FROM items WHERE (((x = 1) OR (y = 2)) AND (z != 3))"
+</pre>
+
+h4. 用symbol来表示数据库函数
+
+<pre>
+  testDB[:users].filter((:x + :y) > :z).sql 
+  #=> "SELECT * FROM items WHERE ((x + y) > z)" 
+
+  testDB[:users].filter{|o| :price - 100 < o.avg(:price)}.sql 
+  #=> "SELECT * FROM items WHERE ((price - 100) < avg(price))"
+</pre> 
+
+h4. Ordering
+
+<pre>
+  dataset.order(:kind)
+  dataset.reverse_order(:kind)
+  dataset.order(:kind.desc, :name)
+</pre>
+
+h4. Row ranges
+
+<pre>
+  dataset.limit(30) # LIMIT 30
+  dataset.limit(30, 10) # LIMIT 30 OFFSET 10
+</pre>
+
+h4. 关联查询
+
+<pre>
+  DB[:items].left_outer_join(:categories, :id => :category_id).sql 
+  #=> "SELECT * FROM items LEFT OUTER JOIN categories ON categories.id = items.category_id"
+
+  DB[:items].join(:categories, :id => :category_id).join(:groups, :id => :items__group_id) 
+  #=> "SELECT * FROM items INNER JOIN categories ON categories.id = items.category_id INNER JOIN groups ON groups.id = items.group_id"
+</pre>
+	
+h4. 数据库聚集函数： Summarizing
+
+<pre>
+  dataset.count #=> record count
+  dataset.max(:price)
+  dataset.min(:price)
+  dataset.avg(:price)
+  dataset.sum(:stock)
+
+  dataset.group(:category).select(:category, :AVG.sql_function(:price))
+</pre>
+
+h4. SQL Functions / Literals
+
+<pre>
+  dataset.update(:updated_at => :NOW.sql_function)
+  dataset.update(:updated_at => 'NOW()'.lit)
+
+  dataset.update(:updated_at => "DateValue('1/1/2001')".lit)
+  dataset.update(:updated_at => :DateValue.sql_function('1/1/2001'))
+</pre>
+
+h4. select as
+
+<pre>
+  testDB[:users].select(:name.as(:nickname))
+  # => "SELECT users.name AS nickname FROM users"
+</pre>
+
+h4. 事务
+
+<pre>
+  testDB.transaction do
+    dataset.insert(:first_name => 'Inigo', :last_name => 'Montoya')
+    dataset.insert(:first_name => 'Farm', :last_name => 'Boy')
+  end # Either both are inserted or neither are inserted
+</pre>
+
+h4. 其他
+
+<pre>
+  dataset.sql #=> "SELECT * FROM items"
+  dataset.delete_sql #=> "DELETE FROM items"
+  dataset.where(:name => 'sequel').exists #=> "EXISTS ( SELECT * FROM items WHERE name = 'sequel' )"
+  dataset.columns #=> array of columns in the result set, does a SELECT
+</pre>
+
+h4. 获取Record
+
+<pre>
+  dataset = DB[:test][:users]
+  dataset.first #获取dataset中的第一个record
+  dataset.all #获取一组record
+  dataset.each{|record|puts record} #对所有record进行遍历  
+  dataset.map{|record|record.nickname} #返回每个record的nickname，结果为: ["zhushi","yunmeng"]
+</pre>
+
+
+h3. Record相关
+
+h4. 获取record的属性
+
+<pre>
+  record = DB[:test][:users].first #获取dataset中的第一个record
+  record.nickname # zhushi
+  record[:nickname] # zhushi, 与上相同， 获取引起歧义的属性时使用(比如列名为：type,class...等)
+
+  # 这里的record， 可以当成Ruby的Hash对象，所以会有以下方法
+  record.keys# [ "nickname", "id","login","email"]
+  record.values# ["zhushi", 1, "zhushi","zhushi@taobao.com"]
+</pre>
+
+h4. 更改属性，并保存
+ 
+注意：需要先设置表的主键， 参见[[DB_Model_Table_pk|设置Table主键]] 
+<pre>
+  record = DB[:test][:users].first #获取dataset中的第一个record
+
+  record.nickname = "zhushi_new"
+  record.save
+  # 或者
+  record = DB[:test][:users].first #获取dataset中的第一个record
+  record.update(:nickname=>"zhushi_new")
+</pre>
+
+
+h4. 删除某个Record
+ 
+注意：需要先设置表的主键， 参见[[DB_Model_Table_pk|设置Table主键]] 
+<pre>
+  record = DB[:test][:users].first #获取dataset中的第一个record
+  record.delete
+</pre>
